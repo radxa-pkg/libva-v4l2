@@ -164,6 +164,35 @@ GST_VA_ALL_DRIVERS=1 gst-launch-1.0 -e \
 For Sunshine/Moonlight, use **H.264 / SDR**. HEVC and AV1 encoder probes may fail
 while H.264 remains available.
 
+### Qualcomm Venus
+
+On kernels exposing the stateful Qualcomm Venus driver as `qcom-venus`, the
+backend discovers the decoder and encoder automatically. Verify the DRM path
+with:
+
+```sh
+vainfo --display drm --device /dev/dri/renderD128
+```
+
+Set `LIBVA_DRIVERS_PATH` when the driver is installed outside libva's default
+search path (for example `/usr/lib64/dri` on distributions with a lib64
+layout).
+
+For mpv, direct VAAPI surfaces work with a GPU video output in a graphical
+Wayland session:
+
+```sh
+mpv --vo=gpu-next --gpu-api=vulkan \
+  --hwdec=vaapi --vaapi-device=/dev/dri/renderD128 input.mp4
+```
+
+Use `--hwdec=vaapi-copy` when the video output cannot import VAAPI surfaces;
+decoding remains hardware accelerated, while frames are copied back to system
+memory before rendering. On the TCL B220G, H.264, HEVC, and VP9 decode and
+H.264/HEVC encode were validated with the Venus firmware. Container muxing of
+newly encoded HEVC still needs explicit codec-extradata handling; raw HEVC and
+decode round-trips are valid.
+
 ## Configuration and development
 
 | Variable | Purpose |
