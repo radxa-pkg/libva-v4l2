@@ -193,6 +193,14 @@ H.264/HEVC encode were validated with the Venus firmware. Container muxing of
 newly encoded HEVC still needs explicit codec-extradata handling; raw HEVC and
 decode round-trips are valid.
 
+Until HEVC packed-header support is added, remux a raw HEVC stream with
+`extract_extradata`:
+
+```sh
+ffmpeg -f hevc -i encoded.hevc -c copy -bsf:v extract_extradata \
+  -f matroska encoded.mkv
+```
+
 ## Configuration and development
 
 | Variable | Purpose |
