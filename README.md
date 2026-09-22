@@ -1,9 +1,16 @@
 # libva-v4l2
 
-A VA-API backend for Qualcomm Iris, using the Linux V4L2 stateful M2M interface.
+A VA-API backend for Qualcomm Iris and Venus, using the Linux V4L2 stateful M2M
+interface.
 It provides hardware video decoding and H.264/HEVC encoding on **SC8280XP**, tested on
 **Radxa Dragon Q8B**. The project is experimental and targets this platform;
 it is not a generic backend for all V4L2 devices.
+
+The device discovery accepts both the original Iris kernel driver name
+(`iris_driver`) and the upstream Qualcomm Venus driver name (`qcom-venus`).
+Venus support is intended for kernels exposing the same stateful controls and
+buffer semantics; codec support still has to be validated on each firmware
+revision.
 
 ## Support
 
@@ -50,7 +57,7 @@ and pipeline configuration.
 
 ## Requirements
 
-- Linux with the Qualcomm Iris stateful driver and MSM DRM support.
+- Linux with the Qualcomm Iris or Venus stateful driver and MSM DRM support.
 - The changes supplied in [patches/](patches/), unless already present in your
   kernel: decode-order output, larger CAPTURE pools, and encoder deblocking
   controls. The patches are references to integrate into your kernel.

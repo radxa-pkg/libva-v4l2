@@ -206,7 +206,7 @@ std::string find_encoder_device() {
         v4l2_capability cap{};
         bool match = false;
         if (!call(fd, VIDIOC_QUERYCAP, &cap) &&
-            !strcmp(reinterpret_cast<char *>(cap.driver), "iris_driver") &&
+            is_supported_stateful_driver(reinterpret_cast<char *>(cap.driver)) &&
             (cap.device_caps & V4L2_CAP_VIDEO_M2M_MPLANE)) {
             v4l2_fmtdesc fmt{};
             fmt.type = CAPTURE;

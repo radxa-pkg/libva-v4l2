@@ -37,6 +37,12 @@ inline void check(bool b, const char *m, VAStatus s = VA_STATUS_ERROR_OPERATION_
 inline bool debug() {
     return std::getenv("IRIS_VAAPI_DEBUG") != nullptr;
 }
+// Qualcomm ships two stateful V4L2 drivers: Venus (qcom-venus) for earlier
+// SoC generations such as SC7180 and Iris (iris_driver) for SC8280XP.  Both
+// expose the stateful multi-planar M2M API consumed by this backend.
+inline bool is_supported_stateful_driver(const char *driver) {
+    return !strcmp(driver, "iris_driver") || !strcmp(driver, "qcom-venus");
+}
 template <class... A> void trace(const char *f, A... a) {
     if (debug()) {
         std::fprintf(stderr, "iris-vaapi: ");

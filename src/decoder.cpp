@@ -72,7 +72,7 @@ std::string find_device() {
         v4l2_capability cap{};
         bool match = false;
         if (!call(fd, VIDIOC_QUERYCAP, &cap) &&
-            !strcmp(reinterpret_cast<char *>(cap.driver), "iris_driver")) {
+            is_supported_stateful_driver(reinterpret_cast<char *>(cap.driver))) {
             unsigned caps =
                 cap.capabilities & V4L2_CAP_DEVICE_CAPS ? cap.device_caps : cap.capabilities;
             if (caps & V4L2_CAP_VIDEO_M2M_MPLANE) {
@@ -89,7 +89,8 @@ std::string find_device() {
         if (match)
             return path;
     }
-    throw Error(VA_STATUS_ERROR_OPERATION_FAILED, "no Iris stateful H264 decoder found");
+    throw Error(VA_STATUS_ERROR_OPERATION_FAILED,
+                "no supported stateful H264 decoder found");
 }
 Decoder::Decoder(const std::string &device, unsigned width, unsigned height, unsigned surfaces,
                  VAProfile profile, int render_fd)
