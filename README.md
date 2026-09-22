@@ -11,6 +11,8 @@ The device discovery accepts both the original Iris kernel driver name
 Venus support is intended for kernels exposing the same stateful controls and
 buffer semantics; codec support still has to be validated on each firmware
 revision.
+On Venus kernels that omit the optional Iris `PREPEND_SPSPPS_TO_IDR` control,
+the backend relies on the required joined sequence-header mode.
 
 ## Support
 
