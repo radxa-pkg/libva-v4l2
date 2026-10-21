@@ -1,9 +1,18 @@
 # libva-v4l2
 
-A VA-API backend for Qualcomm Iris, using the Linux V4L2 stateful M2M interface.
+A VA-API backend for Qualcomm Iris and Venus, using the Linux V4L2 stateful M2M
+interface.
 It provides hardware video decoding and H.264/HEVC encoding on **SC8280XP**, tested on
 **Radxa Dragon Q8B**. The project is experimental and targets this platform;
 it is not a generic backend for all V4L2 devices.
+
+The device discovery accepts both the original Iris kernel driver name
+(`iris_driver`) and the upstream Qualcomm Venus driver name (`qcom-venus`).
+Venus support is intended for kernels exposing the same stateful controls and
+buffer semantics; codec support still has to be validated on each firmware
+revision.
+On Venus kernels that omit the optional Iris `PREPEND_SPSPPS_TO_IDR` control,
+the backend relies on the required joined sequence-header mode.
 
 ## Support
 
@@ -51,7 +60,7 @@ and pipeline configuration.
 
 ## Requirements
 
-- Linux with the Qualcomm Iris stateful driver and MSM DRM support.
+- Linux with the Qualcomm Iris or Venus stateful driver and MSM DRM support.
 - The changes supplied in [patches/](patches/), unless already present in your
   kernel: decode-order output, larger CAPTURE pools, and encoder deblocking
   controls. The patches are references to integrate into your kernel.
@@ -155,6 +164,43 @@ GST_VA_ALL_DRIVERS=1 gst-launch-1.0 -e \
 
 For Sunshine/Moonlight, use **H.264 / SDR**. HEVC and AV1 encoder probes may fail
 while H.264 remains available.
+
+### Qualcomm Venus
+
+On kernels exposing the stateful Qualcomm Venus driver as `qcom-venus`, the
+backend discovers the decoder and encoder automatically. Verify the DRM path
+with:
+
+```sh
+vainfo --display drm --device /dev/dri/renderD128
+```
+
+Set `LIBVA_DRIVERS_PATH` when the driver is installed outside libva's default
+search path (for example `/usr/lib64/dri` on distributions with a lib64
+layout).
+
+For mpv, direct VAAPI surfaces work with a GPU video output in a graphical
+Wayland session:
+
+```sh
+mpv --vo=gpu-next --gpu-api=vulkan \
+  --hwdec=vaapi --vaapi-device=/dev/dri/renderD128 input.mp4
+```
+
+Use `--hwdec=vaapi-copy` when the video output cannot import VAAPI surfaces;
+decoding remains hardware accelerated, while frames are copied back to system
+memory before rendering. On the TCL B220G, H.264, HEVC, and VP9 decode and
+H.264/HEVC encode were validated with the Venus firmware. Container muxing of
+newly encoded HEVC still needs explicit codec-extradata handling; raw HEVC and
+decode round-trips are valid.
+
+Until HEVC packed-header support is added, remux a raw HEVC stream with
+`extract_extradata`:
+
+```sh
+ffmpeg -f hevc -i encoded.hevc -c copy -bsf:v extract_extradata \
+  -f matroska encoded.mkv
+```
 
 ## Configuration and development
 

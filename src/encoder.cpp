@@ -206,7 +206,7 @@ std::string find_encoder_device() {
         v4l2_capability cap{};
         bool match = false;
         if (!call(fd, VIDIOC_QUERYCAP, &cap) &&
-            !strcmp(reinterpret_cast<char *>(cap.driver), "iris_driver") &&
+            is_supported_stateful_driver(reinterpret_cast<char *>(cap.driver)) &&
             (cap.device_caps & V4L2_CAP_VIDEO_M2M_MPLANE)) {
             v4l2_fmtdesc fmt{};
             fmt.type = CAPTURE;
@@ -365,6 +365,22 @@ struct Encoder::Impl {
         ctrl.value = value;
         trace("encoder control id=%#x value=%d", id, value);
         checked(fd, VIDIOC_S_CTRL, &ctrl, "encoder S_CTRL");
+    }
+    bool optional_control(unsigned id, int value) {
+        v4l2_queryctrl query{};
+        query.id = id;
+        if (call(fd, VIDIOC_QUERYCTRL, &query) < 0) {
+            check(errno == EINVAL, "query optional encoder control",
+                  VA_STATUS_ERROR_ENCODING_ERROR);
+            trace("optional encoder control id=%#x is not supported", id);
+            return false;
+        }
+        if (query.flags & V4L2_CTRL_FLAG_DISABLED) {
+            trace("optional encoder control id=%#x is disabled", id);
+            return false;
+        }
+        control(id, value);
+        return true;
     }
     void configure_deblocking() {
         const int ids[] = {settings.hevc ? V4L2_CID_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE
@@ -641,7 +657,9 @@ Encoder::Encoder(const std::string &device, unsigned width, unsigned height, VAP
     // Keyframes follow VA picture requests; prevent autonomous periodic IDRs.
     e.control(V4L2_CID_MPEG_VIDEO_GOP_SIZE, std::numeric_limits<int>::max());
     e.control(V4L2_CID_MPEG_VIDEO_HEADER_MODE, V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME);
-    e.control(V4L2_CID_MPEG_VIDEO_PREPEND_SPSPPS_TO_IDR, 1);
+    // Venus always joins sequence headers to the first frame and does not
+    // expose the Iris-only prepend-SPS/PPS control.
+    e.optional_control(V4L2_CID_MPEG_VIDEO_PREPEND_SPSPPS_TO_IDR, 1);
     e.control(V4L2_CID_MPEG_VIDEO_FRAME_RC_ENABLE, s.rate_control != VA_RC_CQP);
     if (s.rate_control != VA_RC_CQP) {
         e.control(V4L2_CID_MPEG_VIDEO_BITRATE_MODE, s.rate_control == VA_RC_CBR
@@ -658,7 +676,15 @@ Encoder::Encoder(const std::string &device, unsigned width, unsigned height, VAP
         parm.type = type;
         parm.parm.output.timeperframe.numerator = s.fps_den;
         parm.parm.output.timeperframe.denominator = s.fps_num;
-        checked(e.fd, VIDIOC_S_PARM, &parm, "encoder S_PARM");
+        if (call(e.fd, VIDIOC_S_PARM, &parm) < 0) {
+            // Venus exposes the frame interval on OUTPUT only.  CAPTURE is
+            // produced at the rate selected by the OUTPUT queue.
+            if (type == CAPTURE && errno == EINVAL)
+                trace("encoder CAPTURE S_PARM is not supported");
+            else
+                throw Error(VA_STATUS_ERROR_ENCODING_ERROR,
+                            std::string("encoder S_PARM: ") + strerror(errno));
+        }
     }
     // Iris sizes coded buffers differently when rate control is disabled.
     // Refresh CAPTURE after controls, before allocating either queue.
