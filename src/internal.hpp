@@ -183,7 +183,7 @@ class Decoder {
 
   public:
     Decoder(const std::string &device, unsigned width, unsigned height, unsigned surfaces,
-            VAProfile profile, int render_fd);
+            VAProfile profile, unsigned rt_format, int render_fd);
     ~Decoder();
     void submit(const std::vector<uint8_t> &bytes, const std::shared_ptr<Surface> &surface);
     void sync(const std::shared_ptr<Surface> &surface);
@@ -252,7 +252,7 @@ VppPicture vpp_picture(const Buffer &buffer, const std::shared_ptr<Surface> &sou
                        const Surface &target);
 struct Context {
     VAProfile profile;
-    VAProfile decode_profile;
+    VAProfile internal_profile;
     unsigned decode_surfaces = 0;
     VAEntrypoint entrypoint = VAEntrypointVLD;
     unsigned width, height;

@@ -92,10 +92,12 @@ std::string find_device() {
     throw Error(VA_STATUS_ERROR_OPERATION_FAILED, "no Iris stateful H264 decoder found");
 }
 Decoder::Decoder(const std::string &device, unsigned width, unsigned height, unsigned surfaces,
-                 VAProfile profile, int render_fd)
+                 VAProfile profile, unsigned rt_format, int render_fd)
     : render_fd_(render_fd), width_(width), height_(height),
       pool_size_(std::min(64u, std::max(32u, surfaces + 4))),
-      fourcc_(is_10bit(profile) ? VA_FOURCC_P010 : VA_FOURCC_NV12), copier_(render_fd) {
+      fourcc_((is_10bit(profile) && (rt_format == VA_RT_FORMAT_YUV420_10)) ? VA_FOURCC_P010
+                                                                           : VA_FOURCC_NV12),
+      copier_(render_fd) {
     fd_ = open(device.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
     check(fd_ >= 0, "open Iris decoder");
     try {
