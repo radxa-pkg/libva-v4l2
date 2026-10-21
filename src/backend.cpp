@@ -123,7 +123,10 @@ static unsigned encode_attribute(VAConfigAttribType type, VAProfile profile) {
     case VAConfigAttribRTFormat:
         return VA_RT_FORMAT_YUV420;
     case VAConfigAttribRateControl:
-        return VA_RC_CQP | VA_RC_CBR | VA_RC_VBR;
+        // Iris firmware exposes CBR/VBR RC plus fixed-QP mode. ICQ maps to fixed
+        // QP seeded from the ICQ quality factor, QVBR to VBR with a quality
+        // ceiling, and AVBR to CBR; see encoder.cpp.
+        return VA_RC_CQP | VA_RC_CBR | VA_RC_VBR | VA_RC_QVBR | VA_RC_ICQ | VA_RC_AVBR;
     case VAConfigAttribEncPackedHeaders:
         return VA_ENC_PACKED_HEADER_NONE;
     case VAConfigAttribEncInterlaced:
@@ -135,7 +138,7 @@ static unsigned encode_attribute(VAConfigAttribType type, VAProfile profile) {
     case VAConfigAttribEncSliceStructure:
         return VA_ENC_SLICE_STRUCTURE_EQUAL_ROWS;
     case VAConfigAttribEncQualityRange:
-        return 1;
+        return VA_ENC_QUALITY_RANGE;
     case VAConfigAttribPredictionDirection:
         return VA_PREDICTION_DIRECTION_PREVIOUS;
     case VAConfigAttribMaxPictureWidth:
@@ -338,7 +341,8 @@ API(
                   "unsupported encoder attribute", VA_STATUS_ERROR_ATTR_NOT_SUPPORTED);
             if (attrs[i].type == VAConfigAttribRateControl) {
                 check(attrs[i].value == VA_RC_CQP || attrs[i].value == VA_RC_CBR ||
-                          attrs[i].value == VA_RC_VBR,
+                          attrs[i].value == VA_RC_VBR || attrs[i].value == VA_RC_QVBR ||
+                          attrs[i].value == VA_RC_ICQ || attrs[i].value == VA_RC_AVBR,
                       "select one encoder rate control mode", VA_STATUS_ERROR_ATTR_NOT_SUPPORTED);
                 config.rate_control = attrs[i].value;
             }

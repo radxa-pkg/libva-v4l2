@@ -1,7 +1,7 @@
 # libva-v4l2
 
 A VA-API backend for Qualcomm Iris, using the Linux V4L2 stateful M2M interface.
-It provides hardware video decoding and H.264/HEVC encoding on **SC8280XP**, tested on
+It provides hardware video decoding and H.264/HEVC encoding on **SC8280XP/8cx Gen3**, tested on
 **Radxa Dragon Q8B**. The project is experimental and targets this platform;
 it is not a generic backend for all V4L2 devices.
 
@@ -79,6 +79,18 @@ makepkg -si
 The [PKGBUILD](packaging/arch/PKGBUILD) packages the userspace driver. After
 editing packaged sources, regenerate the archive, update `sha256sums` using
 `makepkg -g`, and refresh `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`.
+
+On Debian or Ubuntu:
+
+```sh
+sudo apt install -y build-essential debhelper meson ninja-build pkg-config \
+  libva-dev libdrm-dev libegl1-mesa-dev libgles-dev libgbm-dev
+./build.sh
+sudo apt install -y ./output/libva-v4l2_*_arm64.deb
+```
+
+`build.sh` runs `dpkg-buildpackage -us -uc -b` and collects the packages in
+`output/`.
 
 Alternatively, build and install with Meson:
 
@@ -165,6 +177,35 @@ while H.264 remains available.
 | `IRIS_VAAPI_DEVICE` / `IRIS_VAAPI_ENCODER_DEVICE` | Override automatic video-device discovery. |
 | `IRIS_VAAPI_COPY=gpu` or `cpu` | Select the copy path; default is `gpu`. |
 | `IRIS_VAAPI_DEBUG=1` | Enable diagnostics. |
+
+## Rate control and quality
+
+All VA rate-control modes are accepted. The firmware exposes fixed-QP plus
+CBR/VBR controllers, so the remaining modes are emulated from those:
+
+| VA mode | Firmware behavior |
+| --- | --- |
+| CQP | Fixed QP from the picture QP (`-qp`). |
+| CBR | Constant bitrate controller. |
+| VBR | Variable bitrate with average and peak limits. |
+| QVBR | VBR with `quality_factor` as the maximum-QP ceiling. Bitrate may overshoot the target when the ceiling is hit, as VA specifies. |
+| ICQ | Fixed-QP controller seeded from `ICQ_quality_factor`; the firmware has no adaptive quality mode. |
+| AVBR | CBR; there is no separate average-bitrate controller or convergence window. |
+
+VA quality levels are advertised through `VAConfigAttribEncQualityRange = 4`
+and map to a maximum-QP ceiling for CBR/VBR; the firmware has no speed or
+quality preset, so only the QP budget changes. CQP and ICQ name their QP
+explicitly and are unaffected. Level 0 (default) leaves the range unrestricted.
+
+| Quality level | Maximum QP |
+| --- | --- |
+| 1 (best) | 30 |
+| 2 | 37 |
+| 3 | 44 |
+| 4 (fastest) | 51 |
+
+Sunshine maps its VA-API quality setting to these levels and its rate-control
+setting to the modes above.
 
 Use clang-format 22 and the checked-in `.clang-format`. Meson provides `format`
 and `format-check` targets when clang-format is available; `-Dwerror=true`

@@ -182,9 +182,31 @@ void validate(const EncodeSettings &s, const EncodePicture &p, unsigned width, u
           "unsupported encode frame rate", VA_STATUS_ERROR_INVALID_PARAMETER);
     check(s.min_qp >= 1 && s.max_qp <= 51 && s.min_qp <= s.max_qp, "invalid encode QP limits",
           VA_STATUS_ERROR_INVALID_PARAMETER);
-    if (s.rate_control != VA_RC_CQP)
+    if (s.rate_control == VA_RC_ICQ)
+        check(s.icq_quality >= 1 && s.icq_quality <= 51, "invalid ICQ quality factor",
+              VA_STATUS_ERROR_INVALID_PARAMETER);
+    if (s.rate_control != VA_RC_CQP && s.rate_control != VA_RC_ICQ)
         check(s.bitrate && s.bitrate <= s.peak_bitrate && s.peak_bitrate <= 245000000,
               "invalid encode bitrate", VA_STATUS_ERROR_INVALID_PARAMETER);
+}
+// VA quality levels: 1 = best .. VA_ENC_QUALITY_RANGE = fastest, 0 = default.
+// Iris firmware has no speed/quality preset, so approximate the trade-off by
+// capping the maximum QP the rate controller may reach. Only meaningful with
+// rate control enabled; CQP pictures name their QP explicitly.
+unsigned quality_max_qp(unsigned level, unsigned user_max_qp) {
+    if (!level || level > VA_ENC_QUALITY_RANGE)
+        return user_max_qp;
+    unsigned ceiling = 51 - 7 * (VA_ENC_QUALITY_RANGE - level);
+    return std::min(user_max_qp, ceiling);
+}
+// CQP and ICQ leave the firmware rate controller off (fixed/seeded QP).
+bool qp_mode(unsigned rate_control) {
+    return rate_control == VA_RC_CQP || rate_control == VA_RC_ICQ;
+}
+// AVBR is an average-bitrate mode with no peak constraint: closest firmware
+// behavior is CBR. VBR and QVBR use the firmware VBR mode.
+bool cbr_mode(unsigned rate_control) {
+    return rate_control == VA_RC_CBR || rate_control == VA_RC_AVBR;
 }
 } // namespace
 
@@ -290,11 +312,20 @@ void render_encode_buffer(EncodeSettings &s, EncodePicture &p, const Buffer &b) 
             check(rc.target_percentage <= 100, "invalid target bitrate percentage",
                   VA_STATUS_ERROR_INVALID_PARAMETER);
             s.peak_bitrate = rc.bits_per_second;
-            s.bitrate = s.rate_control == VA_RC_VBR && rc.target_percentage
+            s.bitrate = (s.rate_control == VA_RC_VBR || s.rate_control == VA_RC_QVBR) &&
+                                rc.target_percentage
                             ? uint64_t(rc.bits_per_second) * rc.target_percentage / 100
                             : rc.bits_per_second;
             s.min_qp = rc.min_qp ? rc.min_qp : 1;
             s.max_qp = rc.max_qp ? rc.max_qp : 51;
+            // QVBR names its quality target as a QP ceiling: the encoder stops
+            // spending bits once the target is met, so bitrate may overshoot.
+            if (s.rate_control == VA_RC_QVBR && rc.quality_factor >= 1 &&
+                rc.quality_factor <= 51)
+                s.max_qp = std::min(s.max_qp, rc.quality_factor);
+            // ICQ carries its target as an initial quality factor; this firmware
+            // has no adaptive quality mode, so it seeds a fixed QP (see encode()).
+            s.icq_quality = rc.ICQ_quality_factor;
             break;
         }
         case VAEncMiscParameterTypeFrameRate: {
@@ -307,8 +338,9 @@ void render_encode_buffer(EncodeSettings &s, EncodePicture &p, const Buffer &b) 
         }
         case VAEncMiscParameterTypeQualityLevel: {
             auto quality = parameter<VAEncMiscParameterBufferQualityLevel>(b, off);
-            check(quality.quality_level <= 1, "unsupported encoder quality level",
+            check(quality.quality_level <= VA_ENC_QUALITY_RANGE, "unsupported encoder quality level",
                   VA_STATUS_ERROR_INVALID_PARAMETER);
+            s.quality = quality.quality_level;
             break;
         }
         case VAEncMiscParameterTypeHRD:
@@ -469,8 +501,14 @@ struct Encoder::Impl {
                       "invalid encoder bitstream range", VA_STATUS_ERROR_ENCODING_ERROR);
                 unsigned size = q.plane.bytesused - q.plane.data_offset;
                 if (size) {
-                    uint64_t token =
-                        uint64_t(q.buffer.timestamp.tv_sec) * 1000000 + q.buffer.timestamp.tv_usec;
+                    // Recover the frame token from the timestamp written at QBUF.
+                    // Timestamps carry the real frame period (see encode()); round
+                    // to the nearest token because µs truncation loses <1µs.
+                    const uint64_t ts_us = uint64_t(q.buffer.timestamp.tv_sec) * 1000000 +
+                                           q.buffer.timestamp.tv_usec;
+                    const uint64_t token =
+                        (ts_us * settings.fps_num + 500000ull * settings.fps_den) /
+                        (1000000ull * settings.fps_den);
                     auto it = jobs.find(token);
                     check(it != jobs.end() && !it->second->frame_done, "encoder timestamp mismatch",
                           VA_STATUS_ERROR_ENCODING_ERROR);
@@ -642,16 +680,20 @@ Encoder::Encoder(const std::string &device, unsigned width, unsigned height, VAP
     e.control(V4L2_CID_MPEG_VIDEO_GOP_SIZE, std::numeric_limits<int>::max());
     e.control(V4L2_CID_MPEG_VIDEO_HEADER_MODE, V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME);
     e.control(V4L2_CID_MPEG_VIDEO_PREPEND_SPSPPS_TO_IDR, 1);
-    e.control(V4L2_CID_MPEG_VIDEO_FRAME_RC_ENABLE, s.rate_control != VA_RC_CQP);
-    if (s.rate_control != VA_RC_CQP) {
-        e.control(V4L2_CID_MPEG_VIDEO_BITRATE_MODE, s.rate_control == VA_RC_CBR
+    e.control(V4L2_CID_MPEG_VIDEO_FRAME_RC_ENABLE, !qp_mode(s.rate_control));
+    if (!qp_mode(s.rate_control)) {
+        e.control(V4L2_CID_MPEG_VIDEO_BITRATE_MODE, cbr_mode(s.rate_control)
                                                         ? V4L2_MPEG_VIDEO_BITRATE_MODE_CBR
                                                         : V4L2_MPEG_VIDEO_BITRATE_MODE_VBR);
         e.control(V4L2_CID_MPEG_VIDEO_BITRATE, s.bitrate);
         e.control(V4L2_CID_MPEG_VIDEO_BITRATE_PEAK, s.peak_bitrate);
     }
     e.control(s.hevc ? V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP : V4L2_CID_MPEG_VIDEO_H264_MIN_QP, s.min_qp);
-    e.control(s.hevc ? V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP : V4L2_CID_MPEG_VIDEO_H264_MAX_QP, s.max_qp);
+    unsigned max_qp =
+        qp_mode(s.rate_control) ? s.max_qp : quality_max_qp(s.quality, s.max_qp);
+    if (max_qp != s.max_qp)
+        trace("encoder quality level %u caps max QP %u -> %u", s.quality, s.max_qp, max_qp);
+    e.control(s.hevc ? V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP : V4L2_CID_MPEG_VIDEO_H264_MAX_QP, max_qp);
     e.configure_deblocking();
     for (unsigned type : {CAPTURE, OUTPUT}) {
         v4l2_streamparm parm{};
@@ -740,7 +782,8 @@ std::shared_ptr<EncodeTask> Encoder::encode(const EncodeSettings &s, const Encod
                      p.params.pic_fields.bits.entropy_coding_mode_flag == e.entropy) &&
               s.fps_num == e.settings.fps_num && s.fps_den == e.settings.fps_den &&
               s.bitrate == e.settings.bitrate && s.peak_bitrate == e.settings.peak_bitrate &&
-              s.min_qp == e.settings.min_qp && s.max_qp == e.settings.max_qp,
+              s.min_qp == e.settings.min_qp && s.max_qp == e.settings.max_qp &&
+              s.quality == e.settings.quality && s.icq_quality == e.settings.icq_quality,
           "changing encoder settings requires a new context", VA_STATUS_ERROR_UNIMPLEMENTED);
     const bool idr =
         s.hevc ? p.hevc_params.pic_fields.bits.idr_pic_flag : p.params.pic_fields.bits.idr_pic_flag;
@@ -777,8 +820,12 @@ std::shared_ptr<EncodeTask> Encoder::encode(const EncodeSettings &s, const Encod
               memory->height >= e.height,
           "invalid encoder input surface", VA_STATUS_ERROR_INVALID_SURFACE);
     check(!output.coded_mapped, "coded buffer is mapped", VA_STATUS_ERROR_SURFACE_BUSY);
-    int qp = s.hevc ? int(p.hevc_params.pic_init_qp) + p.hevc_slices.front().slice_qp_delta
-                    : int(p.params.pic_init_qp) + p.slices.front().slice_qp_delta;
+    // ICQ clients leave picture QP at the FFmpeg dummy default; the quality
+    // factor from the rate-control buffer names the intended target instead.
+    int qp = s.rate_control == VA_RC_ICQ
+                 ? int(s.icq_quality)
+                 : s.hevc ? int(p.hevc_params.pic_init_qp) + p.hevc_slices.front().slice_qp_delta
+                          : int(p.params.pic_init_qp) + p.slices.front().slice_qp_delta;
     check(qp >= 1 && qp <= 51, "invalid encode picture QP", VA_STATUS_ERROR_INVALID_PARAMETER);
     e.refresh();
     check(!output.encode_task || !output.encode_task->pending, "coded buffer is pending",
@@ -786,7 +833,7 @@ std::shared_ptr<EncodeTask> Encoder::encode(const EncodeSettings &s, const Encod
     try {
         // Scalar V4L2 controls have no per-request association. Drain before a
         // QP change or forced IDR so they cannot affect an earlier queued frame.
-        if ((s.rate_control == VA_RC_CQP && qp != e.current_qp) || (intra && e.token))
+        if ((qp_mode(s.rate_control) && qp != e.current_qp) || (intra && e.token))
             e.finish();
         if (e.jobs.size() == e.input_count + e.capture.size()) {
             auto task = e.jobs.begin()->second->task;
@@ -848,7 +895,7 @@ std::shared_ptr<EncodeTask> Encoder::encode(const EncodeSettings &s, const Encod
               : e.import ? "staging"
                          : "cpu-mmap",
               unsigned(memory->origin));
-        if (s.rate_control == VA_RC_CQP && qp != e.current_qp) {
+        if (qp_mode(s.rate_control) && qp != e.current_qp) {
             e.control(s.hevc ? V4L2_CID_MPEG_VIDEO_HEVC_I_FRAME_QP
                              : V4L2_CID_MPEG_VIDEO_H264_I_FRAME_QP,
                       qp);
@@ -865,8 +912,13 @@ std::shared_ptr<EncodeTask> Encoder::encode(const EncodeSettings &s, const Encod
         q.plane.length = memory->size;
         q.plane.bytesused = e.input_size;
         const uint64_t token = e.token + 1;
-        q.buffer.timestamp.tv_sec = token / 1000000;
-        q.buffer.timestamp.tv_usec = token % 1000000;
+        // Firmware rate control derives frame intervals from buffer timestamps
+        // (iris forwards them to the HFI buffer). Stamp the real frame period;
+        // token-sized microseconds starve CBR/VBR and force max QP.
+        const uint64_t ts_us =
+            uint64_t(token) * s.fps_den * 1000000 / s.fps_num;
+        q.buffer.timestamp.tv_sec = ts_us / 1000000;
+        q.buffer.timestamp.tv_usec = ts_us % 1000000;
         auto job = std::make_shared<Impl::Job>();
         job->task = std::make_shared<EncodeTask>();
         job->output = coded;

@@ -202,6 +202,10 @@ struct EncodePicture {
         return hevc ? hevc_params.decoded_curr_pic.picture_id : params.CurrPic.picture_id;
     }
 };
+// Supported VAEncMiscParameterBufferQualityLevel range: 1 = best quality,
+// VA_ENC_QUALITY_RANGE = fastest, 0 = driver default. See encoder.cpp for how
+// the level is mapped without a firmware quality/speed preset.
+constexpr unsigned VA_ENC_QUALITY_RANGE = 4;
 struct EncodeSettings {
     VAEncSequenceParameterBufferH264 sequence{};
     VAEncSequenceParameterBufferHEVC hevc_sequence{};
@@ -209,6 +213,8 @@ struct EncodeSettings {
     bool has_sequence = false;
     unsigned rate_control = VA_RC_CQP;
     unsigned bitrate = 0, peak_bitrate = 0, min_qp = 1, max_qp = 51;
+    unsigned quality = 0;
+    unsigned icq_quality = 0;
     unsigned fps_num = 30, fps_den = 1;
 };
 void render_encode_buffer(EncodeSettings &settings, EncodePicture &picture, const Buffer &buffer);
