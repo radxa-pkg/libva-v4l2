@@ -321,6 +321,12 @@ void render_encode_buffer(EncodeSettings &s, EncodePicture &p, const Buffer &b) 
         }
         break;
     }
+    case VAEncPackedHeaderParameterBufferType:
+    case VAEncPackedHeaderDataBufferType:
+        // Accepted so clients can build container extradata from their own
+        // sequence headers.  The payload is not spliced into the coded
+        // stream: the stateful encoder emits equivalent headers in-band.
+        break;
     default:
         throw Error(VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE, "unsupported encode buffer");
     }

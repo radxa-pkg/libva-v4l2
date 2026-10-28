@@ -125,7 +125,10 @@ static unsigned encode_attribute(VAConfigAttribType type, VAProfile profile) {
     case VAConfigAttribRateControl:
         return VA_RC_CQP | VA_RC_CBR | VA_RC_VBR;
     case VAConfigAttribEncPackedHeaders:
-        return VA_ENC_PACKED_HEADER_NONE;
+        // The stateful encoder emits sequence headers in-band, but clients
+        // such as FFmpeg only write container extradata (avcC/hvcC) when the
+        // driver accepts packed sequence headers.
+        return VA_ENC_PACKED_HEADER_SEQUENCE;
     case VAConfigAttribEncInterlaced:
         return VA_ENC_INTERLACED_NONE;
     case VAConfigAttribEncMaxRefFrames:
@@ -641,7 +644,9 @@ API(create_buffer,
           : encoding
               ? (type == VAEncSequenceParameterBufferType ||
                  type == VAEncPictureParameterBufferType || type == VAEncSliceParameterBufferType ||
-                 type == VAEncMiscParameterBufferType || type == VAEncCodedBufferType)
+                 type == VAEncMiscParameterBufferType || type == VAEncCodedBufferType ||
+                 type == VAEncPackedHeaderParameterBufferType ||
+                 type == VAEncPackedHeaderDataBufferType)
               : (type == VAPictureParameterBufferType || type == VAIQMatrixBufferType ||
                  type == VASliceParameterBufferType || type == VASliceDataBufferType),
           "unsupported buffer type", VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE);
